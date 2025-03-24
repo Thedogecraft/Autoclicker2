@@ -182,11 +182,8 @@
                         Background="{DynamicResource ControlFillColorDefaultBrush}"
                         CornerRadius="8">
                         <StackPanel>
-                            <CheckBox x:Name="RandomDelayCheckBox" Content="Add random delay (±25%)" />
-                            <CheckBox
-                                Margin="0,10,0,0"
-                                Content="Click at cursor position"
-                                IsChecked="True" />
+                            <!--<CheckBox x:Name="RandomDelayCheckBox" Content="Add random delay (±25%)" />-->
+
                             <Grid Margin="0,10,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -203,6 +200,7 @@
                                     Maximum="10000"
                                     Minimum="0"
                                     PlaceholderText="0 = Unlimited"
+                                    ValueChanged="ClickLimitBox_ValueChanged"
                                     Value="0" />
                             </Grid>
                         </StackPanel>

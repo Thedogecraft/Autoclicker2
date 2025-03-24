@@ -8,6 +8,10 @@ using System.Windows.Threading;
 using Wpf.Ui.Appearance;
 using AutoUpdaterDotNET;
 using System.Reflection;
+using System.Threading;
+using System.Net;
+using Wpf.Ui.Controls;
+using Wpf.Ui;
 namespace Autoclicker
 {
     // Windows APIs SUCK
@@ -23,71 +27,63 @@ namespace Autoclicker
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
         private const int HOTKEY_ID = 9000;
-        private uint selectedHotkey = 0x77;  // Default F8
+        private uint selectedHotkey = 0x77;  // the default key is F8
         private const uint MOD_NONE = 0x0000;
 
-        // Mouse button constants
-        private uint mouseButtonDown = 0x02;  // Left button down
-        private uint mouseButtonUp = 0x04;    // Left button up
-
+        // mouse button constants
+        private uint mouseButtonDown = 0x02;  // left button down
+        private uint mouseButtonUp = 0x04;    // left button up
+        private Thread clickThread;
         private bool autoclickerEnabled = false;
-        private DispatcherTimer autoclickerTimer;
-        private Random random = new Random();
         private int clickCount = 0;
         private int clickLimit = 0;
+        public bool isRunning = false;
 
-        // Minimum interval in milliseconds (1ms = 1000 clicks per second theoretical maximum)
-        private const double MIN_INTERVAL = 10; // 10ms = up to 100 clicks per second
+        private const double MIN_INTERVAL = 10;
 
         public MainWindow()
         {
             InitializeComponent();
-            AutoUpdater.Start("https://thedogecraft.github.io/Autoclicker/Version.xml");
+
+            AutoUpdater.CheckForUpdateEvent += AutoUpdaterOnCheckForUpdateEvent;
+            AutoUpdater.Start("https://thedogecraft.github.io/Autoclicker2/Version.xml");
             AutoUpdater.RunUpdateAsAdmin = true;
-           
-            InitializeAutoclickerTimer();
             ApplicationThemeManager.Apply(this);
             SetupUIBindings();
 
-            // Make sure the slider's minimum value is set to allow for very fast clicking
-            // This should be done in XAML, but im adding here as a backup
             if (ClickSpeedSlider != null)
             {
                 ClickSpeedSlider.Minimum = MIN_INTERVAL;
-                ClickSpeedSlider.Maximum = 1000; // 1 click per second at slowest
+                ClickSpeedSlider.Maximum = 1000;
                 ClickSpeedSlider.SmallChange = 10;
                 ClickSpeedSlider.LargeChange = 50;
             }
         }
-     
+
         private void SetupUIBindings()
         {
-          
+
             StatusText.Text = "Ready - Press F8 to start";
             StatusIndicator.Fill = new SolidColorBrush(Colors.Gray);
 
-            // Setup mouse button radio events
-            LeftClickRadio.Checked += (s, e) => {
-                mouseButtonDown = 0x02;  // Left button down
-                mouseButtonUp = 0x04;    // Left button up
+            // setup mouse button radio events
+            LeftClickRadio.Checked += (s, e) =>
+            {
+                mouseButtonDown = 0x02;  // left button down
+                mouseButtonUp = 0x04;    // left button up
             };
 
-            RightClickRadio.Checked += (s, e) => {
-                mouseButtonDown = 0x08;  // Right button down
-                mouseButtonUp = 0x10;    // Right button up
+            RightClickRadio.Checked += (s, e) =>
+            {
+                mouseButtonDown = 0x08;  // right button down
+                mouseButtonUp = 0x10;    // right button up
             };
 
-            MiddleClickRadio.Checked += (s, e) => {
-                mouseButtonDown = 0x20;  // Middle button down
-                mouseButtonUp = 0x40;    // Middle button up
+            MiddleClickRadio.Checked += (s, e) =>
+            {
+                mouseButtonDown = 0x20;  // middle button down
+                mouseButtonUp = 0x40;    // middle button up
             };
-        }
-
-        private void InitializeAutoclickerTimer()
-        {
-            autoclickerTimer = new DispatcherTimer();
-            autoclickerTimer.Interval = TimeSpan.FromMilliseconds(100);
-            autoclickerTimer.Tick += AutoclickerTimer_Tick;
         }
 
         protected override void OnSourceInitialized(EventArgs e)
@@ -136,14 +132,18 @@ namespace Autoclicker
                 StatusText.Text = "Running - Press hotkey to stop";
                 StatusIndicator.Fill = new SolidColorBrush(Colors.Green);
                 clickCount = 0;
-                autoclickerTimer.Start();
+                isRunning = true;
+                clickThread = new Thread(StartClicking);
+                clickThread.IsBackground = true;
+                clickThread.Start();
             }
             else
             {
                 StartStopButton.Content = "Start Clicking";
                 StatusText.Text = "Ready - Press hotkey to start";
                 StatusIndicator.Fill = new SolidColorBrush(Colors.Gray);
-                autoclickerTimer.Stop();
+                isRunning = false;
+                clickThread?.Join(100);
             }
         }
 
@@ -152,34 +152,48 @@ namespace Autoclicker
             ToggleAutoclicker();
         }
 
-        private void AutoclickerTimer_Tick(object sender, EventArgs e)
+        private void StartClicking()
         {
-            DoMouseClick();
-            clickCount++;
-
-            if (clickLimit > 0 && clickCount >= clickLimit)
+            while (isRunning)
             {
-                ToggleAutoclicker();
-                return;
-            }
+                DoMouseClick();
+                clickCount++;
+                if (clickCount >= clickLimit && clickLimit > 0)
+                {
+                    StopClicking();
+                    Dispatcher.Invoke(() =>
+                    {
+                        StartStopButton.Content = "Start Clicking";
+                        StatusText.Text = "Ready - Press hotkey to start";
+                        StatusIndicator.Fill = new SolidColorBrush(Colors.Gray);
+                    });
+                    isRunning = false;
 
-            if (RandomDelayCheckBox.IsChecked == true)
-            {
-                double baseInterval = ClickSpeedSlider.Value;
-                double variation = baseInterval * 0.25; // 25% variation
-                double newInterval = baseInterval + (random.NextDouble() * variation * 2 - variation);
-                newInterval = Math.Max(newInterval, MIN_INTERVAL);
-                autoclickerTimer.Interval = TimeSpan.FromMilliseconds(newInterval);
+                }
+                double interval = 0;
+                ClickSpeedSlider.Dispatcher.Invoke(() =>
+                {
+                    interval = Math.Max(MIN_INTERVAL, ClickSpeedSlider.Value);
+                });
+                Thread.Sleep((int)interval);
             }
+        }
+
+        public void StopClicking()
+        {
+            isRunning = false;
         }
 
         private void DoMouseClick()
         {
-            mouse_event(mouseButtonDown | mouseButtonUp, 0, 0, 0, 0);
+            mouse_event(mouseButtonDown, 0, 0, 0, 0);
+            Thread.Sleep(10);
+            mouse_event(mouseButtonUp, 0, 0, 0, 0);
         }
 
         protected override void OnClosed(EventArgs e)
         {
+            isRunning = false;
             IntPtr hWnd = new WindowInteropHelper(this).Handle;
             if (hWnd != IntPtr.Zero)
             {
@@ -190,13 +204,11 @@ namespace Autoclicker
 
         private void ClickSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (autoclickerTimer != null)
-            {
-                double value = Math.Max(MIN_INTERVAL, Math.Round(e.NewValue));
-                autoclickerTimer.Interval = TimeSpan.FromMilliseconds(value);
+            double value = Math.Max(MIN_INTERVAL, Math.Round(e.NewValue));
+            double clicksPerSecond = 1000 / value;
 
-              
-                double clicksPerSecond = 1000 / value;
+            if (ClickSpeedLabel != null)
+            {
                 ClickSpeedLabel.Text = $"Clicking every {value} ms ({clicksPerSecond:F1} clicks per second)";
             }
         }
@@ -235,7 +247,81 @@ namespace Autoclicker
             RegisterHotkey();
             StatusText.Text = $"Ready - Press {selectedKey} to start";
         }
+        private async void AutoUpdaterOnCheckForUpdateEvent(UpdateInfoEventArgs args)
+        {
+            if (args.Error == null)
+            {
+                if (args.IsUpdateAvailable)
+                {
+                    var messageBox = new Wpf.Ui.Controls.MessageBox
+                    {
+                        Title = "Update Available",
+                        Content = args.Mandatory.Value
+                            ? $"A new version {args.CurrentVersion} is available. You are using version {args.InstalledVersion}. This is a required update. Press OK to begin updating."
+                            : $"A new version {args.CurrentVersion} is available. You are using version {args.InstalledVersion}. Do you want to update now?",
+                        PrimaryButtonText = args.Mandatory.Value ? "OK" : "Yes",
+                        SecondaryButtonText = args.Mandatory.Value ? null : "No",
+                        CloseButtonText = "Cancel",
+                        ShowTitle = true
+                    };
 
+                    var result = await messageBox.ShowDialogAsync();
+
+                    if (result == Wpf.Ui.Controls.MessageBoxResult.Primary) // User clicked 'Yes' or 'OK'
+                    {
+                        try
+                        {
+                            if (AutoUpdater.DownloadUpdate(args))
+                            {
+                                Application.Current.Shutdown();
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            await ShowErrorDialog(exception);
+                        }
+                    }
+                }
+                else
+                {
+                    await ShowMessageDialog("No Update Available", "There is no update available. Please try again later.");
+                }
+            }
+            else
+            {
+                string errorMessage = args.Error is WebException
+                    ? "There is a problem reaching the update server. Please check your internet connection and try again later."
+                    : args.Error.Message;
+
+                await ShowMessageDialog("Update Check Failed", errorMessage);
+            }
+        }
+
+        private async Task ShowMessageDialog(string title, string message)
+        {
+            var messageBox = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = title,
+                Content = message,
+                PrimaryButtonText = "OK",
+                ShowTitle = true
+            };
+
+            await messageBox.ShowDialogAsync();
+        }
+
+        private async Task ShowErrorDialog(Exception exception)
+        {
+            var messageBox = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = exception.GetType().ToString(),
+                Content = exception.Message,
+                PrimaryButtonText = "OK",
+                ShowTitle = true
+            };
+
+            await messageBox.ShowDialogAsync();
+        }
         private void TextBlock_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             string url = "https://github.com/thedogecraft/autoclicker";
@@ -244,6 +330,11 @@ namespace Autoclicker
                 FileName = url,
                 UseShellExecute = true
             });
+        }
+
+        private void ClickLimitBox_ValueChanged(object sender, NumberBoxValueChangedEventArgs args)
+        {
+            clickLimit = (int)args.NewValue;
         }
     }
 }
